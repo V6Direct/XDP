@@ -2,6 +2,7 @@
 package models
 
 import (
+	"sync"
 	"time"
 
 	"github.com/nsp/ddos-platform/pkg/types"
@@ -32,15 +33,16 @@ type LoginResponse struct {
 
 // DashboardData aggregates all data needed by the frontend dashboard.
 type DashboardData struct {
-	Metrics     *types.Metrics  `json:"metrics"`
-	BlockedIPs  []types.BlockedIP  `json:"blocked_ips"`
+	Metrics      *types.Metrics      `json:"metrics"`
+	BlockedIPs   []types.BlockedIP   `json:"blocked_ips"`
 	TopAttackers []types.AttackingIP `json:"top_attackers"`
-	Alerts      []types.Alert   `json:"alerts"`
-	UpdatedAt   time.Time       `json:"updated_at"`
+	Alerts       []types.Alert       `json:"alerts"`
+	UpdatedAt    time.Time           `json:"updated_at"`
 }
 
-// AlertStore is an in-memory ring buffer of recent alerts.
+// AlertStore is a concurrency-safe in-memory ring buffer of recent alerts.
 type AlertStore struct {
+	mu     sync.Mutex
 	alerts []types.Alert
 	max    int
 	seq    uint64
@@ -55,7 +57,11 @@ func NewAlertStore(maxAlerts int) *AlertStore {
 }
 
 // Add appends an alert, evicting the oldest if at capacity.
+// Safe for concurrent use.
 func (a *AlertStore) Add(alert types.Alert) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
 	a.seq++
 	alert.ID = time.Now().Format("20060102150405") + "-" + itoa(a.seq)
 	if len(a.alerts) >= a.max {
@@ -66,7 +72,11 @@ func (a *AlertStore) Add(alert types.Alert) {
 }
 
 // List returns a copy of all current alerts (newest first).
+// Safe for concurrent use.
 func (a *AlertStore) List() []types.Alert {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
 	out := make([]types.Alert, len(a.alerts))
 	for i, v := range a.alerts {
 		out[len(a.alerts)-1-i] = v
