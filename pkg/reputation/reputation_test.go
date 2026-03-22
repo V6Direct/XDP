@@ -55,7 +55,6 @@ func TestLoadFeedBasicIPs(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	mgr.Start(ctx)
-	time.Sleep(1 * time.Second)
 	mgr.Stop()
 
 	if len(blocked) != 3 {
@@ -81,7 +80,6 @@ func TestLoadFeedWithCIDR(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	mgr.Start(ctx)
-	time.Sleep(1 * time.Second)
 	mgr.Stop()
 
 	if atomic.LoadInt32(&count) != 2 {
@@ -111,7 +109,6 @@ func TestLoadFeedSkipsComments(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	mgr.Start(ctx)
-	time.Sleep(1 * time.Second)
 	mgr.Stop()
 
 	// Should only block 1.2.3.4 and 2.3.4.5 (not the commented-out 5.6.7.8)
@@ -145,7 +142,6 @@ func TestLoadFeedSkipsIPv6(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	mgr.Start(ctx)
-	time.Sleep(1 * time.Second)
 	mgr.Stop()
 
 	if len(blocked) != 2 {
@@ -174,7 +170,6 @@ func TestLoadFeedDisabled(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	mgr.Start(ctx)
-	time.Sleep(1 * time.Second)
 	mgr.Stop()
 
 	if atomic.LoadInt32(&count) != 0 {
@@ -194,7 +189,6 @@ func TestFeedNon200(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	mgr.Start(ctx)
-	time.Sleep(1 * time.Second)
 	mgr.Stop()
 
 	if atomic.LoadInt32(&count) != 0 {
@@ -214,7 +208,6 @@ func TestManagerStats(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	mgr.Start(ctx)
-	time.Sleep(1 * time.Second)
 	mgr.Stop()
 
 	stats := mgr.Stats()

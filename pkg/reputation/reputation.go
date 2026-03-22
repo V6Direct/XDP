@@ -43,8 +43,9 @@ type Manager struct {
 	loaded     map[string]time.Time // feed URL → last successful load
 	ipCount    map[string]int       // feed URL → IPs loaded
 	stopCh     chan struct{}
-	noStagger  bool       // skip startup stagger delay (for testing)
-	stopOnce   sync.Once // ensures Stop() is idempotent
+	noStagger  bool          // skip startup stagger delay (for testing)
+	stopOnce   sync.Once     // ensures Stop() is idempotent
+	wg         sync.WaitGroup // tracks running runFeed goroutines
 }
 
 // Option is a functional option for Manager.
@@ -116,13 +117,19 @@ func (m *Manager) Start(ctx context.Context) {
 		if interval < 5*time.Minute {
 			interval = 5 * time.Minute
 		}
-		go m.runFeed(ctx, feed, interval)
+		m.wg.Add(1)
+		go func(f Feed, iv time.Duration) {
+			defer m.wg.Done()
+			m.runFeed(ctx, f, iv)
+		}(feed, interval)
 	}
 }
 
-// Stop signals all feed goroutines to exit. Safe to call multiple times.
+// Stop signals all feed goroutines to exit and waits for them to finish.
+// Safe to call multiple times.
 func (m *Manager) Stop() {
 	m.stopOnce.Do(func() { close(m.stopCh) })
+	m.wg.Wait()
 }
 
 // Stats returns a snapshot of feed load times and IP counts.
