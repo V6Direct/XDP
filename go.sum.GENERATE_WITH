@@ -1,0 +1,9 @@
+# This file is intentionally absent from the repository.
+# Generate it by running:
+#
+#   cd /path/to/ddos-platform
+#   go mod download
+#   go mod tidy
+#
+# Or simply run:
+#   make tidy
