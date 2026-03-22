@@ -239,3 +239,7 @@ scrape_configs:
 ## License
 
 MIT – See LICENSE file.
+
+## Warning
+
+Yes we know this code is a mess.
