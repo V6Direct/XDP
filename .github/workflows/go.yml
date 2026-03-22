@@ -1,0 +1,77 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Go tests
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-go@v5
+      with:
+        go-version: '1.22'
+    - name: Cache Go modules
+      uses: actions/cache@v4
+      with:
+        path: ~/go/pkg/mod
+        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+        restore-keys: |
+          ${{ runner.os }}-go-
+    - name: Go test
+      run: go test -v ./...
+
+  bpf-compile:
+    name: BPF Compile Check
+    runs-on: ubuntu-22.04
+    needs: test
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install BPF toolchain
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y --no-install-recommends \
+          clang llvm libelf-dev libbpf-dev \
+          "linux-headers-$(uname -r)" 2>/dev/null || \
+        sudo apt-get install -y --no-install-recommends \
+          clang llvm libelf-dev libbpf-dev \
+          linux-headers-generic
+
+    - name: Compile XDP program
+      run: |
+        mkdir -p .build/lib/ddos
+        XDP_OUT_DIR=.build/lib/ddos bash scripts/build_xdp.sh
+        
+        echo "--- ELF sections ---"
+        llvm-objdump -h .build/lib/ddos/xdp_main.o \
+          | grep -E 'xdp|\.maps|BTF' || true
+        
+        echo "--- Object file type ---"
+        file .build/lib/ddos/xdp_main.o
+
+  docker-build:
+    name: Docker Build
+    runs-on: ubuntu-latest
+    needs: [test, bpf-compile]
+    steps:
+    - uses: actions/checkout@v4
+    - uses: docker/setup-buildx-action@v3
+    - uses: docker/metadata-action@v5
+      id: meta
+      with:
+        images: ddos-webpanel
+    - uses: docker/build-push-action@v5
+      with:
+        context: .
+        file: deployments/docker/Dockerfile.webpanel
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        tags: ${{ steps.meta.outputs.tags }}
