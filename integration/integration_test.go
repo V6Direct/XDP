@@ -12,10 +12,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
-	"net"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -44,17 +43,21 @@ func newStack(t *testing.T) *stack {
 
 	// ── Mock Control Plane ──
 	cpMux := http.NewServeMux()
+	var storeMu sync.Mutex
 	blockedStore := make(map[string]types.BlockedIP)
 	whitelistStore := make(map[string]struct{})
 
 	cpMux.HandleFunc("/api/v1/metrics", func(w http.ResponseWriter, r *http.Request) {
+		storeMu.Lock()
+		blocked := len(blockedStore)
+		storeMu.Unlock()
 		json.NewEncoder(w).Encode(types.Metrics{
 			TotalPackets:   1_000_000,
 			DroppedPackets: 10_000,
 			PassedPackets:  990_000,
 			PPS:            50_000,
 			BPS:            3_200_000_000,
-			BlockedIPCount: len(blockedStore),
+			BlockedIPCount: blocked,
 			SYNFloods:      5,
 			Timestamp:      time.Now(),
 		})
@@ -63,10 +66,12 @@ func newStack(t *testing.T) *stack {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.Method {
 		case http.MethodGet:
+			storeMu.Lock()
 			list := make([]types.BlockedIP, 0, len(blockedStore))
 			for _, b := range blockedStore {
 				list = append(list, b)
 			}
+			storeMu.Unlock()
 			json.NewEncoder(w).Encode(list)
 		case http.MethodPost:
 			var req struct {
@@ -74,16 +79,20 @@ func newStack(t *testing.T) *stack {
 				Reason uint32 `json:"reason"`
 			}
 			json.NewDecoder(r.Body).Decode(&req)
+			storeMu.Lock()
 			blockedStore[req.IP] = types.BlockedIP{
 				IP:        req.IP,
 				Reason:    types.ReasonString(req.Reason),
 				BlockedAt: time.Now(),
 			}
+			storeMu.Unlock()
 			json.NewEncoder(w).Encode(map[string]string{"status": "blocked", "ip": req.IP})
 		case http.MethodDelete:
 			var req struct{ IP string `json:"ip"` }
 			json.NewDecoder(r.Body).Decode(&req)
+			storeMu.Lock()
 			delete(blockedStore, req.IP)
+			storeMu.Unlock()
 			json.NewEncoder(w).Encode(map[string]string{"status": "unblocked", "ip": req.IP})
 		}
 	})
@@ -111,10 +120,14 @@ func newStack(t *testing.T) *stack {
 		json.NewDecoder(r.Body).Decode(&req)
 		switch r.Method {
 		case http.MethodPost:
+			storeMu.Lock()
 			whitelistStore[req.IP] = struct{}{}
+			storeMu.Unlock()
 			json.NewEncoder(w).Encode(map[string]string{"status": "whitelisted"})
 		case http.MethodDelete:
+			storeMu.Lock()
 			delete(whitelistStore, req.IP)
+			storeMu.Unlock()
 			json.NewEncoder(w).Encode(map[string]string{"status": "removed"})
 		}
 	})
@@ -391,12 +404,13 @@ func TestIntegration_ControlPlaneUnavailable(t *testing.T) {
 	// Point panel at a port that nobody is listening on
 	authMgr := auth.NewManager("test-secret")
 
-	// Find a free port then immediately close it
-	l, _ := net.Listen("tcp", "127.0.0.1:0")
-	deadPort := l.Addr().String()
-	l.Close()
+	// Use a URL that will immediately refuse connections.
+	// 127.0.0.1:1 is a privileged port that is never listening in CI.
+	// Using a closed httptest server guarantees connection refused.
+	dead := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	dead.Close() // now closed: connections will be refused
 
-	cpClient := api.NewControlPlaneClient("http://" + deadPort)
+	cpClient := api.NewControlPlaneClient(dead.URL)
 	alertStore := models.NewAlertStore(100)
 	handler := api.NewHandler(authMgr, cpClient, alertStore)
 
@@ -459,5 +473,5 @@ func TestIntegration_ConcurrentRequests(t *testing.T) {
 	if ok < 90 {
 		t.Errorf("only %d/100 concurrent requests succeeded", ok)
 	}
-	_ = fmt.Sprintf("concurrent: %d/100 OK", ok)
+	t.Logf("concurrent: %d/100 OK", ok)
 }

@@ -51,11 +51,11 @@ func TestLoadFeedBasicIPs(t *testing.T) {
 		Enabled:  true,
 	}}
 
-	mgr := reputation.NewManager(feeds, blockFn, nil)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	mgr := reputation.NewManager(feeds, blockFn, nil, reputation.WithNoStagger())
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	mgr.Start(ctx)
-	time.Sleep(200 * time.Millisecond)
+	time.Sleep(1 * time.Second)
 	mgr.Stop()
 
 	if len(blocked) != 3 {
@@ -77,11 +77,11 @@ func TestLoadFeedWithCIDR(t *testing.T) {
 	}
 
 	feeds := []reputation.Feed{{Name: "cidr-test", URL: srv.URL, Interval: time.Hour, Enabled: true}}
-	mgr := reputation.NewManager(feeds, blockFn, nil)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	mgr := reputation.NewManager(feeds, blockFn, nil, reputation.WithNoStagger())
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	mgr.Start(ctx)
-	time.Sleep(200 * time.Millisecond)
+	time.Sleep(1 * time.Second)
 	mgr.Stop()
 
 	if atomic.LoadInt32(&count) != 2 {
@@ -107,11 +107,11 @@ func TestLoadFeedSkipsComments(t *testing.T) {
 	}
 
 	feeds := []reputation.Feed{{Name: "comment-test", URL: srv.URL, Interval: time.Hour, Enabled: true}}
-	mgr := reputation.NewManager(feeds, blockFn, nil)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	mgr := reputation.NewManager(feeds, blockFn, nil, reputation.WithNoStagger())
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	mgr.Start(ctx)
-	time.Sleep(200 * time.Millisecond)
+	time.Sleep(1 * time.Second)
 	mgr.Stop()
 
 	// Should only block 1.2.3.4 and 2.3.4.5 (not the commented-out 5.6.7.8)
@@ -141,11 +141,11 @@ func TestLoadFeedSkipsIPv6(t *testing.T) {
 	}
 
 	feeds := []reputation.Feed{{Name: "ipv6-test", URL: srv.URL, Interval: time.Hour, Enabled: true}}
-	mgr := reputation.NewManager(feeds, blockFn, nil)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	mgr := reputation.NewManager(feeds, blockFn, nil, reputation.WithNoStagger())
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	mgr.Start(ctx)
-	time.Sleep(200 * time.Millisecond)
+	time.Sleep(1 * time.Second)
 	mgr.Stop()
 
 	if len(blocked) != 2 {
@@ -170,11 +170,11 @@ func TestLoadFeedDisabled(t *testing.T) {
 		Enabled:  false, // disabled
 	}}
 
-	mgr := reputation.NewManager(feeds, blockFn, nil)
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	mgr := reputation.NewManager(feeds, blockFn, nil, reputation.WithNoStagger())
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	mgr.Start(ctx)
-	time.Sleep(300 * time.Millisecond)
+	time.Sleep(1 * time.Second)
 	mgr.Stop()
 
 	if atomic.LoadInt32(&count) != 0 {
@@ -190,11 +190,11 @@ func TestFeedNon200(t *testing.T) {
 	blockFn := func(_ string, _ uint32) error { atomic.AddInt32(&count, 1); return nil }
 
 	feeds := []reputation.Feed{{Name: "403-feed", URL: srv.URL, Interval: time.Hour, Enabled: true}}
-	mgr := reputation.NewManager(feeds, blockFn, nil)
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	mgr := reputation.NewManager(feeds, blockFn, nil, reputation.WithNoStagger())
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	mgr.Start(ctx)
-	time.Sleep(500 * time.Millisecond)
+	time.Sleep(1 * time.Second)
 	mgr.Stop()
 
 	if atomic.LoadInt32(&count) != 0 {
@@ -209,12 +209,12 @@ func TestManagerStats(t *testing.T) {
 
 	blockFn := func(_ string, _ uint32) error { return nil }
 	feeds := []reputation.Feed{{Name: "stats-test", URL: srv.URL, Interval: time.Hour, Enabled: true}}
-	mgr := reputation.NewManager(feeds, blockFn, nil)
+	mgr := reputation.NewManager(feeds, blockFn, nil, reputation.WithNoStagger())
 
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	mgr.Start(ctx)
-	time.Sleep(500 * time.Millisecond)
+	time.Sleep(1 * time.Second)
 	mgr.Stop()
 
 	stats := mgr.Stats()
@@ -246,8 +246,8 @@ func TestHashStringDeterministic(t *testing.T) {
 			Enabled:  false, // disabled so no actual HTTP
 		}
 	}
-	mgr := reputation.NewManager(feeds, func(string, uint32) error { return nil }, nil)
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	mgr := reputation.NewManager(feeds, func(string, uint32) error { return nil }, nil, reputation.WithNoStagger())
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 	mgr.Start(ctx) // should not panic
 	mgr.Stop()

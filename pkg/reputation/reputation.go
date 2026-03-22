@@ -35,14 +35,25 @@ type BlockFunc func(ip string, reason uint32) error
 
 // Manager downloads and applies reputation feeds.
 type Manager struct {
-	feeds     []Feed
-	blockFn   BlockFunc
-	log       *logger.Logger
-	client    *http.Client
-	mu        sync.RWMutex
-	loaded    map[string]time.Time // feed URL → last successful load
-	ipCount   map[string]int       // feed URL → IPs loaded
-	stopCh    chan struct{}
+	feeds      []Feed
+	blockFn    BlockFunc
+	log        *logger.Logger
+	client     *http.Client
+	mu         sync.RWMutex
+	loaded     map[string]time.Time // feed URL → last successful load
+	ipCount    map[string]int       // feed URL → IPs loaded
+	stopCh     chan struct{}
+	noStagger  bool       // skip startup stagger delay (for testing)
+	stopOnce   sync.Once // ensures Stop() is idempotent
+}
+
+// Option is a functional option for Manager.
+type Option func(*Manager)
+
+// WithNoStagger disables the startup stagger delay between feeds.
+// Use this in tests to make feeds load immediately on Start().
+func WithNoStagger() Option {
+	return func(m *Manager) { m.noStagger = true }
 }
 
 // DefaultFeeds contains well-known public IP blocklists.
@@ -68,11 +79,11 @@ var DefaultFeeds = []Feed{
 }
 
 // NewManager creates a reputation Manager.
-func NewManager(feeds []Feed, blockFn BlockFunc, log *logger.Logger) *Manager {
+func NewManager(feeds []Feed, blockFn BlockFunc, log *logger.Logger, opts ...Option) *Manager {
 	if log == nil {
 		log = logger.Default
 	}
-	return &Manager{
+	m := &Manager{
 		feeds:   feeds,
 		blockFn: blockFn,
 		log:     log.With("component", "reputation"),
@@ -88,6 +99,10 @@ func NewManager(feeds []Feed, blockFn BlockFunc, log *logger.Logger) *Manager {
 		ipCount: make(map[string]int),
 		stopCh:  make(chan struct{}),
 	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
 }
 
 // Start begins background feed refresh goroutines.
@@ -105,9 +120,9 @@ func (m *Manager) Start(ctx context.Context) {
 	}
 }
 
-// Stop signals all feed goroutines to exit.
+// Stop signals all feed goroutines to exit. Safe to call multiple times.
 func (m *Manager) Stop() {
-	close(m.stopCh)
+	m.stopOnce.Do(func() { close(m.stopCh) })
 }
 
 // Stats returns a snapshot of feed load times and IP counts.
@@ -135,14 +150,17 @@ type FeedStat struct {
 // ─── Internal ─────────────────────────────────────────────────────────────────
 
 func (m *Manager) runFeed(ctx context.Context, feed Feed, interval time.Duration) {
-	// Stagger initial loads to avoid thundering herd on startup
-	startDelay := time.Duration(hashString(feed.URL)%60) * time.Second
-	select {
-	case <-ctx.Done():
-		return
-	case <-m.stopCh:
-		return
-	case <-time.After(startDelay):
+	// Stagger initial loads to avoid thundering herd on startup.
+	// Skipped when noStagger is set (e.g. in tests).
+	if !m.noStagger {
+		startDelay := time.Duration(hashString(feed.URL)%60) * time.Second
+		select {
+		case <-ctx.Done():
+			return
+		case <-m.stopCh:
+			return
+		case <-time.After(startDelay):
+		}
 	}
 
 	// Load immediately on first run

@@ -509,15 +509,21 @@ func humanBits(bps float64) string {
 }
 
 func humanBytes(b float64) string {
+	const (
+		_KB = 1024.0
+		_MB = 1024.0 * _KB
+		_GB = 1024.0 * _MB
+		_TB = 1024.0 * _GB
+	)
 	switch {
-	case b >= 1e12:
-		return fmt.Sprintf("%.2f TB", b/1e12)
-	case b >= 1e9:
-		return fmt.Sprintf("%.2f GB", b/1e9)
-	case b >= 1e6:
-		return fmt.Sprintf("%.2f MB", b/1e6)
-	case b >= 1e3:
-		return fmt.Sprintf("%.2f KB", b/1e3)
+	case b >= _TB:
+		return fmt.Sprintf("%.2f TB", b/_TB)
+	case b >= _GB:
+		return fmt.Sprintf("%.2f GB", b/_GB)
+	case b >= _MB:
+		return fmt.Sprintf("%.2f MB", b/_MB)
+	case b >= _KB:
+		return fmt.Sprintf("%.2f KB", b/_KB)
 	default:
 		return fmt.Sprintf("%.0f B", b)
 	}
