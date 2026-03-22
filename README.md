@@ -101,8 +101,8 @@ apt-get install -y \
 
 ```bash
 # 1. Clone and enter
-git clone https://github.com/nsp/ddos-platform
-cd ddos-platform
+git clone https://github.com/V6Direct/XDP.git
+cd XDP
 
 # 2. Get Go dependencies
 go mod tidy
