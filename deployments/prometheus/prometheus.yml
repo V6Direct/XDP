@@ -1,0 +1,41 @@
+# ============================================================
+# prometheus.yml – Scrape config for DDoS Mitigation Platform
+# ============================================================
+global:
+  scrape_interval:     5s
+  evaluation_interval: 15s
+  external_labels:
+    environment: production
+    service:     ddos-mitigation
+
+rule_files:
+  - /etc/prometheus/rules/ddos_alerts.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+            - alertmanager:9093
+
+scrape_configs:
+  # ── DDoS Control Plane ──────────────────────────────────
+  - job_name: ddos-controlplane
+    static_configs:
+      - targets:
+          - localhost:9090
+    metrics_path: /metrics
+    scrape_interval: 5s
+    scrape_timeout:  4s
+
+  # ── Web Panel (if it exposes /metrics in the future) ────
+  # - job_name: ddos-webpanel
+  #   static_configs:
+  #     - targets:
+  #         - localhost:3000
+
+  # ── Node exporter (host metrics) ────────────────────────
+  - job_name: node
+    static_configs:
+      - targets:
+          - localhost:9100
+    scrape_interval: 15s

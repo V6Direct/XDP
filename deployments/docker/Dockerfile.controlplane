@@ -1,0 +1,55 @@
+# ============================================================
+# Dockerfile.controlplane
+# Multi-stage: (1) build BPF + Go, (2) minimal runtime
+# ============================================================
+
+# ── Stage 1: Build BPF object ─────────────────────────────
+FROM ubuntu:22.04 AS bpf-builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    clang llvm libelf-dev libbpf-dev \
+    linux-headers-generic \
+    make ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+COPY pkg/xdp/c_src/ pkg/xdp/c_src/
+COPY scripts/build_xdp.sh scripts/
+
+# Build for the container's kernel version
+RUN bash scripts/build_xdp.sh || \
+    (echo "BPF build failed – building stub object" && \
+     clang -O2 -target bpf -c pkg/xdp/c_src/xdp_main.c \
+           -I/usr/include -I/usr/include/bpf \
+           -o /usr/local/lib/ddos/xdp_main.o 2>/dev/null || true)
+
+# ── Stage 2: Build Go binary ──────────────────────────────
+FROM golang:1.22-bookworm AS go-builder
+
+WORKDIR /src
+COPY go.mod go.sum* ./
+RUN go mod download
+
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+    go build -trimpath -ldflags="-s -w" \
+    -o /bin/ddos-controlplane ./cmd/controlplane/
+
+# ── Stage 3: Runtime ─────────────────────────────────────
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libelf1 libbpf1 iproute2 curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /sys/fs/bpf/ddos /usr/local/lib/ddos
+
+COPY --from=go-builder  /bin/ddos-controlplane       /usr/local/bin/ddos-controlplane
+COPY --from=bpf-builder /usr/local/lib/ddos/xdp_main.o /usr/local/lib/ddos/xdp_main.o
+
+# BPF needs host networking and privileges — set in compose/k8s
+USER root
+
+EXPOSE 8080 9090
+
+ENTRYPOINT ["/usr/local/bin/ddos-controlplane"]
+CMD ["--iface", "eth0", "--api", ":8080", "--metrics", ":9090"]

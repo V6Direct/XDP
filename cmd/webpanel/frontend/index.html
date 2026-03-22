@@ -1,0 +1,470 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DDoS Mitigation Console</title>
+  <link rel="stylesheet" href="/styles.css">
+  <!-- Chart.js from CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+</head>
+<body>
+
+<!-- ═══════════════════════════════════════════════════
+     LOGIN SCREEN
+═══════════════════════════════════════════════════ -->
+<div id="login-screen">
+  <div class="login-box">
+    <div class="login-logo">
+      <span class="logo-icon">🛡</span>
+      <h1>DDOS CONSOLE</h1>
+      <p>Network Security Platform</p>
+    </div>
+    <form id="login-form" autocomplete="off">
+      <label for="login-username">Username</label>
+      <input id="login-username" type="text" placeholder="admin" autocomplete="username" required>
+      <label for="login-password">Password</label>
+      <input id="login-password" type="password" placeholder="••••••••" autocomplete="current-password" required>
+      <button type="submit" class="btn-primary">AUTHENTICATE</button>
+    </form>
+    <div id="login-error" class="login-error"></div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════
+     MAIN APP
+═══════════════════════════════════════════════════ -->
+<div id="app">
+
+  <!-- ── Top Navigation ── -->
+  <nav class="topnav">
+    <div class="nav-brand">
+      <span class="shield">🛡</span>
+      <span>DDoS Console</span>
+    </div>
+    <div class="nav-status">
+      <div class="status-dot"></div>
+      <span>ACTIVE MITIGATION &nbsp;·&nbsp;</span>
+      <span id="nav-pps">0 pps</span>
+    </div>
+    <div class="nav-right">
+      <span class="nav-user">
+        <span id="nav-username"></span>
+        &nbsp;<span style="color:var(--border-glow)">|</span>&nbsp;
+        <span id="nav-role" style="color:var(--accent-dim)"></span>
+      </span>
+      <button class="btn-logout" id="btn-logout">LOGOUT</button>
+    </div>
+  </nav>
+
+  <!-- ── Tabs ── -->
+  <div class="tabs">
+    <div class="tab active" data-tab="overview">Overview</div>
+    <div class="tab" data-tab="blocked">Blocked IPs</div>
+    <div class="tab" data-tab="attackers">Top Attackers</div>
+    <div class="tab" data-tab="alerts">Alerts</div>
+    <div class="tab" data-tab="config">Configuration</div>
+  </div>
+
+  <!-- ── Content ── -->
+  <main class="content">
+
+    <!-- Refresh progress bar -->
+    <div class="refresh-bar">
+      <div class="refresh-bar-inner" id="refresh-bar-inner" style="width:0%"></div>
+    </div>
+
+    <!-- ════════════════════════════════
+         TAB: OVERVIEW
+    ════════════════════════════════ -->
+    <div class="tab-panel active" id="tab-overview">
+
+      <!-- Stat cards -->
+      <div class="stat-grid">
+        <div class="stat-card" id="stat-pps">
+          <div class="stat-label">Packets / sec</div>
+          <div class="stat-value accent">—</div>
+          <div class="stat-sub">PPS</div>
+        </div>
+        <div class="stat-card" id="stat-bps">
+          <div class="stat-label">Bits / sec</div>
+          <div class="stat-value">—</div>
+          <div class="stat-sub">Throughput</div>
+        </div>
+        <div class="stat-card success" id="stat-passed">
+          <div class="stat-label">Passed</div>
+          <div class="stat-value success">—</div>
+          <div class="stat-sub">Total passed packets</div>
+        </div>
+        <div class="stat-card" id="stat-dropped">
+          <div class="stat-label">Dropped</div>
+          <div class="stat-value">—</div>
+          <div class="stat-sub">Total dropped packets</div>
+        </div>
+        <div class="stat-card" id="stat-blocked">
+          <div class="stat-label">Blocked IPs</div>
+          <div class="stat-value">—</div>
+          <div class="stat-sub">Currently in blocklist</div>
+        </div>
+        <div class="stat-card warn" id="stat-syn">
+          <div class="stat-label">SYN Floods</div>
+          <div class="stat-value">—</div>
+          <div class="stat-sub">Cumulative events</div>
+        </div>
+        <div class="stat-card warn" id="stat-udp">
+          <div class="stat-label">UDP Amp</div>
+          <div class="stat-value">—</div>
+          <div class="stat-sub">Amplification events</div>
+        </div>
+        <div class="stat-card" id="stat-icmp">
+          <div class="stat-label">ICMP Floods</div>
+          <div class="stat-value">—</div>
+          <div class="stat-sub">Rate-limited events</div>
+        </div>
+      </div>
+
+      <!-- Sparkline charts -->
+      <div class="sparkline-row">
+        <div class="sparkline-card">
+          <div class="chart-label">// Packets Per Second</div>
+          <div style="height:80px">
+            <canvas id="chart-pps"></canvas>
+          </div>
+        </div>
+        <div class="sparkline-card">
+          <div class="chart-label">// Throughput (Mbps)</div>
+          <div style="height:80px">
+            <canvas id="chart-bps"></canvas>
+          </div>
+        </div>
+        <div class="sparkline-card">
+          <div class="chart-label">// Dropped Packets / tick</div>
+          <div style="height:80px">
+            <canvas id="chart-drops"></canvas>
+          </div>
+        </div>
+      </div>
+
+      <!-- Two-column lower section -->
+      <div class="two-col">
+        <!-- Recent Blocked IPs (mini) -->
+        <div class="panel">
+          <div class="panel-header">
+            <span class="section-title">Recent Blocks</span>
+            <button class="btn-action" onclick="switchTab('blocked')">VIEW ALL</button>
+          </div>
+          <div class="table-scroll" style="max-height:240px">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>IP Address</th>
+                  <th>Reason</th>
+                  <th>Blocked At</th>
+                </tr>
+              </thead>
+              <tbody id="overview-blocked-tbody">
+                <tr><td colspan="3" class="empty-state">Loading...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Recent Alerts (mini) -->
+        <div class="panel">
+          <div class="panel-header">
+            <span class="section-title">Recent Alerts</span>
+            <button class="btn-action" onclick="switchTab('alerts')">VIEW ALL</button>
+          </div>
+          <div class="table-scroll" style="max-height:240px">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Level</th>
+                  <th>Message</th>
+                  <th>Time</th>
+                </tr>
+              </thead>
+              <tbody id="overview-alerts-tbody">
+                <tr><td colspan="3" class="empty-state">Loading...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div><!-- /tab-overview -->
+
+    <!-- ════════════════════════════════
+         TAB: BLOCKED IPs
+    ════════════════════════════════ -->
+    <div class="tab-panel" id="tab-blocked">
+      <div class="section-head">
+        <span class="section-title">Blocked IP Addresses</span>
+        <button class="btn-action success" onclick="loadBlockedIPs()">↻ REFRESH</button>
+      </div>
+
+      <!-- Manual block form -->
+      <div class="panel admin-only" style="margin-bottom:20px">
+        <div class="panel-header">
+          <span class="section-title">Manual Block</span>
+        </div>
+        <div style="padding:16px 18px">
+          <div class="input-row">
+            <input id="block-ip-input" type="text" placeholder="192.168.1.100">
+            <select id="block-reason-select">
+              <option value="1">SYN Flood</option>
+              <option value="2">UDP Amplification</option>
+              <option value="3">ICMP Flood</option>
+            </select>
+            <button class="btn-action danger" id="btn-block-ip">BLOCK IP</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="table-scroll">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>IP Address</th>
+                <th>Reason</th>
+                <th>Blocked At</th>
+                <th class="admin-only">Action</th>
+              </tr>
+            </thead>
+            <tbody id="blocked-tbody">
+              <tr><td colspan="4" class="empty-state">Loading...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div><!-- /tab-blocked -->
+
+    <!-- ════════════════════════════════
+         TAB: TOP ATTACKERS
+    ════════════════════════════════ -->
+    <div class="tab-panel" id="tab-attackers">
+      <div class="section-head">
+        <span class="section-title">Top Attacking Source IPs</span>
+        <button class="btn-action success" onclick="loadAttackers()">↻ REFRESH</button>
+      </div>
+      <div class="panel">
+        <div class="table-scroll">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>IP Address</th>
+                <th style="text-align:right">Total Pkts</th>
+                <th style="text-align:right">Total Bytes</th>
+                <th style="text-align:right;color:var(--orange)">SYN</th>
+                <th style="text-align:right;color:var(--yellow)">UDP</th>
+                <th style="text-align:right;color:var(--red)">ICMP</th>
+                <th class="admin-only">Action</th>
+              </tr>
+            </thead>
+            <tbody id="attackers-tbody">
+              <tr><td colspan="8" class="empty-state">Loading...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div><!-- /tab-attackers -->
+
+    <!-- ════════════════════════════════
+         TAB: ALERTS
+    ════════════════════════════════ -->
+    <div class="tab-panel" id="tab-alerts">
+      <div class="section-head">
+        <span class="section-title">Security Alerts</span>
+        <button class="btn-action success" onclick="loadAlerts()">↻ REFRESH</button>
+      </div>
+      <div class="panel">
+        <div class="table-scroll">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Level</th>
+                <th>Type</th>
+                <th>Message</th>
+                <th>Source IP</th>
+                <th style="text-align:right">Time</th>
+              </tr>
+            </thead>
+            <tbody id="alerts-tbody">
+              <tr><td colspan="5" class="empty-state">No alerts</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div><!-- /tab-alerts -->
+
+    <!-- ════════════════════════════════
+         TAB: CONFIGURATION
+    ════════════════════════════════ -->
+    <div class="tab-panel" id="tab-config">
+      <div class="section-head">
+        <span class="section-title">XDP Rate Limits &amp; Settings</span>
+      </div>
+
+      <div class="two-col">
+        <!-- Rate limits -->
+        <div class="panel admin-only">
+          <div class="panel-header">
+            <span class="section-title">Rate Limits (pkts/sec)</span>
+          </div>
+          <div class="config-form">
+
+            <div class="config-row">
+              <div class="config-label">
+                SYN Rate Limit
+                <div class="config-desc">Max SYN packets per IP per second before blocking</div>
+              </div>
+              <input class="config-input" id="cfg-syn-rate" type="number" value="1000" min="1">
+            </div>
+
+            <div class="config-row">
+              <div class="config-label">
+                UDP Rate Limit
+                <div class="config-desc">Max UDP packets per IP per second (amplification detection)</div>
+              </div>
+              <input class="config-input" id="cfg-udp-rate" type="number" value="5000" min="1">
+            </div>
+
+            <div class="config-row">
+              <div class="config-label">
+                ICMP Rate Limit
+                <div class="config-desc">Max ICMP packets per IP per second before blocking</div>
+              </div>
+              <input class="config-input" id="cfg-icmp-rate" type="number" value="100" min="1">
+            </div>
+
+            <div style="margin-top:24px">
+              <button class="btn-primary" id="btn-save-config" style="width:auto;padding:10px 28px">
+                SAVE CONFIG
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Mitigation toggle + whitelist -->
+        <div style="display:flex;flex-direction:column;gap:20px">
+          <div class="panel admin-only">
+            <div class="panel-header">
+              <span class="section-title">Mitigation Status</span>
+            </div>
+            <div style="padding:20px 18px">
+              <div class="config-row">
+                <div class="config-label">
+                  XDP Mitigation Enabled
+                  <div class="config-desc">Toggle packet filtering on/off without detaching XDP</div>
+                </div>
+                <div class="config-toggle" id="mitigation-toggle" data-enabled="1">
+                  <div class="toggle-track on">
+                    <div class="toggle-thumb"></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="panel admin-only">
+            <div class="panel-header">
+              <span class="section-title">IP Whitelist</span>
+            </div>
+            <div style="padding:16px 18px">
+              <p style="font-size:11px;color:var(--text-dim);font-family:var(--mono);margin-bottom:14px">
+                Whitelisted IPs bypass all rate-limit checks.
+              </p>
+              <div class="input-row">
+                <input id="whitelist-ip-input" type="text" placeholder="10.0.0.1">
+                <button class="btn-action success" id="btn-whitelist-ip">WHITELIST</button>
+                <button class="btn-action danger"  id="btn-unwhitelist-ip">REMOVE</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Info panel for viewers -->
+      <div class="panel" style="margin-top:20px">
+        <div class="panel-header">
+          <span class="section-title">System Information</span>
+        </div>
+        <div style="padding:18px;display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px">
+          <div>
+            <div class="stat-label">BPF Pin Path</div>
+            <div style="font-family:var(--mono);font-size:13px;color:var(--accent)">/sys/fs/bpf/ddos/</div>
+          </div>
+          <div>
+            <div class="stat-label">XDP Maps</div>
+            <div style="font-family:var(--mono);font-size:12px;color:var(--text)">
+              ip_stats_map · blocked_ips · global_stats_map · whitelist_map · config_map
+            </div>
+          </div>
+          <div>
+            <div class="stat-label">XDP Program</div>
+            <div style="font-family:var(--mono);font-size:13px;color:var(--text)">xdp_main (CO-RE libbpf)</div>
+          </div>
+          <div>
+            <div class="stat-label">Metrics Endpoint</div>
+            <div style="font-family:var(--mono);font-size:13px;color:var(--accent)">:9090/metrics</div>
+          </div>
+        </div>
+      </div>
+
+    </div><!-- /tab-config -->
+
+  </main><!-- /content -->
+</div><!-- /app -->
+
+<!-- Toast container -->
+<div id="toast-container"></div>
+
+<script src="/app.js"></script>
+
+<!-- Wire up overview mini-tables from polling data -->
+<script>
+(function patchFetchMetrics() {
+  const orig = window.fetchMetrics;
+  // After metrics fetch also refresh overview sub-tables
+  const _orig = fetchMetrics;
+  window.fetchMetrics = async function() {
+    await _orig();
+    // Mirror recent blocked + alerts into overview panels
+    const blocked = await apiGet('/api/v1/blocked');
+    if (blocked) {
+      const tbody = document.getElementById('overview-blocked-tbody');
+      if (tbody) {
+        if (!blocked.length) {
+          tbody.innerHTML = '<tr><td colspan="3" class="empty-state">None</td></tr>';
+        } else {
+          tbody.innerHTML = blocked.slice(0, 5).map(e =>
+            `<tr>
+              <td class="ip-cell">${esc(e.ip)}</td>
+              <td style="font-size:11px">${esc(e.reason)}</td>
+              <td class="num-cell">${new Date(e.blocked_at).toLocaleTimeString()}</td>
+            </tr>`).join('');
+        }
+      }
+    }
+    const alerts = await apiGet('/api/v1/alerts');
+    if (alerts) {
+      const tbody = document.getElementById('overview-alerts-tbody');
+      if (tbody) {
+        if (!alerts.length) {
+          tbody.innerHTML = '<tr><td colspan="3" class="empty-state">None</td></tr>';
+        } else {
+          tbody.innerHTML = alerts.slice(0, 5).map(a =>
+            `<tr>
+              <td><span class="alert-badge ${esc(a.level)}">${esc(a.level)}</span></td>
+              <td style="font-size:11px">${esc(a.message)}</td>
+              <td class="num-cell">${new Date(a.timestamp).toLocaleTimeString()}</td>
+            </tr>`).join('');
+        }
+      }
+    }
+  };
+})();
+</script>
+</body>
+</html>

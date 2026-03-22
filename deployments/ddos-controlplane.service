@@ -1,0 +1,43 @@
+[Unit]
+Description=DDoS Mitigation Control Plane (XDP + BPF)
+Documentation=https://github.com/nsp/ddos-platform
+After=network-online.target
+Wants=network-online.target
+# Ensure BPF filesystem is mounted before starting
+RequiresMountsFor=/sys/fs/bpf
+
+[Service]
+Type=simple
+User=root
+Group=root
+
+# Binary and arguments – override IFACE with an environment file
+EnvironmentFile=-/etc/ddos-platform/controlplane.env
+ExecStart=/usr/local/bin/ddos-controlplane \
+    --iface ${DDOS_IFACE:-eth0} \
+    --api   ${DDOS_API_ADDR:-:8080} \
+    --metrics ${DDOS_METRICS_ADDR:-:9090}
+
+# If the process exits, wait 5s then restart
+Restart=on-failure
+RestartSec=5s
+
+# Hard limits – BPF needs full capabilities
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_SYS_ADMIN CAP_BPF
+AmbientCapabilities=CAP_NET_ADMIN CAP_SYS_ADMIN CAP_BPF
+NoNewPrivileges=no
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ddos-controlplane
+
+# Resource limits
+LimitNOFILE=65535
+LimitMEMLOCK=infinity
+
+# Allow reading/writing /sys/fs/bpf
+ReadWritePaths=/sys/fs/bpf /var/run /var/log /usr/local/lib/ddos
+
+[Install]
+WantedBy=multi-user.target

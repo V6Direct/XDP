@@ -1,0 +1,35 @@
+[Unit]
+Description=DDoS Mitigation Web Panel
+Documentation=https://github.com/nsp/ddos-platform
+After=network-online.target ddos-controlplane.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ddos-panel
+Group=ddos-panel
+
+EnvironmentFile=-/etc/ddos-platform/webpanel.env
+ExecStart=/usr/local/bin/ddos-webpanel \
+    --addr    ${PANEL_ADDR:-:3000} \
+    --cp      ${CP_URL:-http://localhost:8080} \
+    --frontend ${FRONTEND_DIR:-/usr/local/share/ddos-platform/frontend} \
+    --prod
+
+Restart=on-failure
+RestartSec=5s
+
+# Web panel doesn't need BPF capabilities
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=/var/log
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ddos-webpanel
+
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,146 @@
+# ============================================================
+# Prometheus Alerting Rules – DDoS Mitigation Platform
+# Deploy to: /etc/prometheus/rules/ddos.yml
+# ============================================================
+groups:
+  - name: ddos_mitigation
+    interval: 15s
+    rules:
+
+      # ── Traffic volume ──────────────────────────────────
+      - alert: ExtremePacketRate
+        expr: ddos_packets_per_second > 500000
+        for: 10s
+        labels:
+          severity: critical
+          team: noc
+        annotations:
+          summary: "Extreme packet rate on XDP interface"
+          description: >
+            Packet rate is {{ humanize $value }} pps — possible volumetric DDoS.
+            Check the web panel at http://localhost:3000 for top attackers.
+
+      - alert: HighPacketRate
+        expr: ddos_packets_per_second > 100000
+        for: 30s
+        labels:
+          severity: warning
+          team: noc
+        annotations:
+          summary: "High packet rate detected"
+          description: "Packet rate is {{ humanize $value }} pps (threshold: 100K pps)."
+
+      - alert: HighBitRate
+        expr: ddos_bits_per_second > 10e9
+        for: 30s
+        labels:
+          severity: warning
+          team: noc
+        annotations:
+          summary: "High bit rate detected (>10 Gbps)"
+          description: >
+            Current throughput: {{ humanizeSI $value }}bps.
+            Possible bandwidth saturation attack.
+
+      # ── Attack-type alerts ──────────────────────────────
+      - alert: SYNFloodOngoing
+        expr: increase(ddos_syn_floods_total[1m]) > 50
+        for: 0s
+        labels:
+          severity: critical
+          team: noc
+          attack_type: syn_flood
+        annotations:
+          summary: "SYN flood attack in progress"
+          description: >
+            {{ $value | humanize }} SYN flood events in the last minute.
+            XDP is actively blocking offending sources.
+
+      - alert: UDPAmplificationOngoing
+        expr: increase(ddos_udp_amplification_total[1m]) > 20
+        for: 0s
+        labels:
+          severity: critical
+          team: noc
+          attack_type: udp_amplification
+        annotations:
+          summary: "UDP amplification attack detected"
+          description: >
+            {{ $value | humanize }} UDP amplification events in the last minute.
+            Common vectors: DNS (53), NTP (123), Memcached (11211).
+
+      - alert: ICMPFloodOngoing
+        expr: increase(ddos_icmp_floods_total[1m]) > 30
+        for: 0s
+        labels:
+          severity: warning
+          team: noc
+          attack_type: icmp_flood
+        annotations:
+          summary: "ICMP flood detected"
+          description: >
+            {{ $value | humanize }} ICMP flood events in the last minute.
+
+      # ── Drop ratio ──────────────────────────────────────
+      - alert: HighDropRatio
+        expr: >
+          ddos_dropped_packets_total /
+          (ddos_total_packets_total + 1) > 0.5
+        for: 1m
+        labels:
+          severity: warning
+          team: noc
+        annotations:
+          summary: "More than 50% of traffic is being dropped"
+          description: >
+            Drop ratio: {{ $value | humanizePercentage }}.
+            This may indicate a severe attack or misconfigured rate limits.
+
+      # ── Blocklist growth ────────────────────────────────
+      - alert: BlocklistSaturated
+        expr: ddos_blocked_ips_count > 3500
+        for: 2m
+        labels:
+          severity: warning
+          team: noc
+        annotations:
+          summary: "Blocklist approaching capacity (4096)"
+          description: >
+            {{ $value }} IPs are currently blocked.
+            Consider increasing MAX_BLOCKED_IPS or clearing stale entries.
+
+      - alert: RapidBlocklistGrowth
+        expr: increase(ddos_blocked_ips_count[5m]) > 100
+        for: 0s
+        labels:
+          severity: critical
+          team: noc
+        annotations:
+          summary: "Rapid blocklist growth — distributed attack"
+          description: >
+            {{ $value | humanize }} new IPs blocked in the last 5 minutes.
+            Likely a distributed (botnet) attack from many source IPs.
+
+      # ── Control plane health ────────────────────────────
+      - alert: ControlPlaneDown
+        expr: absent(ddos_total_packets_total)
+        for: 30s
+        labels:
+          severity: critical
+          team: noc
+        annotations:
+          summary: "DDoS control plane is not reachable"
+          description: >
+            The Prometheus metric ddos_total_packets_total has disappeared.
+            Check: systemctl status ddos-controlplane
+
+      - alert: MetricsScrapeStale
+        expr: time() - ddos_total_packets_total > 60
+        for: 1m
+        labels:
+          severity: warning
+          team: noc
+        annotations:
+          summary: "DDoS metrics have not been updated for >60s"
+          description: >
+            The last successful metrics collection was more than 60 seconds ago.

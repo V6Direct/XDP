@@ -1,0 +1,115 @@
+version: "3.9"
+
+# ============================================================
+# docker-compose.yml – DDoS Platform dev/CI environment
+#
+# NOTE: XDP requires a real Linux kernel with eBPF support.
+#       The controlplane runs in --iface=lo (loopback) mode
+#       for development.  For production, run natively on
+#       the host (see scripts/install.sh).
+#
+# Usage:
+#   docker compose up -d
+#   docker compose logs -f controlplane
+#   open http://localhost:3000
+# ============================================================
+
+services:
+
+  # ── Control Plane ─────────────────────────────────────
+  controlplane:
+    build:
+      context: .
+      dockerfile: deployments/docker/Dockerfile.controlplane
+    image: ddos-controlplane:dev
+    container_name: ddos-controlplane
+    restart: unless-stopped
+    network_mode: host          # Required for XDP map access
+    privileged: true            # Required for BPF/XDP
+    cap_add:
+      - NET_ADMIN
+      - SYS_ADMIN
+      - BPF
+    volumes:
+      - bpf_pins:/sys/fs/bpf/ddos
+      - xdp_obj:/usr/local/lib/ddos
+    environment:
+      DDOS_IFACE:        ${DDOS_IFACE:-lo}
+      DDOS_API_ADDR:     ":8080"
+      DDOS_METRICS_ADDR: ":9090"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+  # ── Web Panel ─────────────────────────────────────────
+  webpanel:
+    build:
+      context: .
+      dockerfile: deployments/docker/Dockerfile.webpanel
+    image: ddos-webpanel:dev
+    container_name: ddos-webpanel
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      PANEL_ADDR:    ":3000"
+      CP_URL:        "http://localhost:8080"
+      FRONTEND_DIR:  "/app/frontend"
+      JWT_SECRET:    "${JWT_SECRET:-dev-secret-change-in-production}"
+    network_mode: host
+    depends_on:
+      controlplane:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:3000"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # ── Prometheus ────────────────────────────────────────
+  prometheus:
+    image: prom/prometheus:v2.51.0
+    container_name: ddos-prometheus
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./deployments/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./deployments/prometheus/ddos_alerts.yml:/etc/prometheus/rules/ddos_alerts.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=30d
+      - --web.enable-lifecycle
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:9090/-/healthy"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  # ── Grafana ───────────────────────────────────────────
+  grafana:
+    image: grafana/grafana:10.4.0
+    container_name: ddos-grafana
+    restart: unless-stopped
+    ports:
+      - "3001:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER:     admin
+      GF_SECURITY_ADMIN_PASSWORD: "${GRAFANA_PASSWORD:-changeme}"
+      GF_USERS_ALLOW_SIGN_UP:     "false"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./deployments/grafana/provisioning:/etc/grafana/provisioning:ro
+    depends_on:
+      prometheus:
+        condition: service_healthy
+
+volumes:
+  bpf_pins:
+  xdp_obj:
+  prometheus_data:
+  grafana_data:

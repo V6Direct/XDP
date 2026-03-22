@@ -1,0 +1,31 @@
+# ============================================================
+# Dockerfile.webpanel – Web Panel backend + frontend
+# ============================================================
+
+FROM golang:1.22-bookworm AS builder
+
+WORKDIR /src
+COPY go.mod go.sum* ./
+RUN go mod download
+
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+    go build -trimpath -ldflags="-s -w" \
+    -o /bin/ddos-webpanel ./cmd/webpanel/backend/
+
+# ── Runtime ──────────────────────────────────────────────
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd -r -s /usr/sbin/nologin ddos-panel
+
+COPY --from=builder /bin/ddos-webpanel /usr/local/bin/ddos-webpanel
+COPY cmd/webpanel/frontend /app/frontend
+
+USER ddos-panel
+EXPOSE 3000
+
+ENTRYPOINT ["/usr/local/bin/ddos-webpanel"]
+CMD ["--addr", ":3000", "--frontend", "/app/frontend", "--prod"]

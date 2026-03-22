@@ -1,0 +1,139 @@
+name: DDoS Platform CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+env:
+  GO_VERSION: "1.22"
+
+jobs:
+  # ── Unit + Integration Tests ─────────────────────────────
+  test:
+    name: Test (Go ${{ matrix.go }})
+    runs-on: ubuntu-22.04
+    strategy:
+      matrix:
+        go: ["1.22"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go }}
+          cache: true
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: Unit tests (race)
+        run: |
+          go test -race -timeout 120s \
+            -coverprofile=coverage.out \
+            -covermode=atomic \
+            ./pkg/... \
+            ./cmd/ddosctl/... \
+            ./cmd/webpanel/...
+
+      - name: Integration tests (race)
+        run: |
+          go test -race -timeout 60s ./integration/...
+
+      - name: Benchmarks (smoke)
+        run: |
+          go test -bench=. -benchtime=500ms -run='^$' ./benchmarks/...
+
+      - name: Upload coverage
+        uses: codecov/codecov-action@v4
+        with:
+          files: ./coverage.out
+          fail_ci_if_error: false
+
+  # ── Build binaries ────────────────────────────────────────
+  build:
+    name: Build Binaries
+    runs-on: ubuntu-22.04
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Build webpanel
+        run: |
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+          go build -trimpath -ldflags="-s -w \
+            -X main.version=${{ github.sha }}" \
+            -o bin/ddos-webpanel ./cmd/webpanel/backend/
+
+      - name: Build ddosctl
+        run: |
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+          go build -trimpath -ldflags="-s -w" \
+            -o bin/ddosctl ./cmd/ddosctl/
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: binaries-${{ github.sha }}
+          path: bin/
+
+  # ── BPF compilation check (Linux only) ───────────────────
+  bpf-compile:
+    name: BPF Compile Check
+    runs-on: ubuntu-22.04
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install BPF toolchain
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            clang llvm libelf-dev libbpf-dev \
+            linux-headers-$(uname -r) || \
+          sudo apt-get install -y --no-install-recommends \
+            clang llvm libelf-dev libbpf-dev \
+            linux-headers-generic
+
+      - name: Compile XDP program
+        run: |
+          mkdir -p /usr/local/lib/ddos
+          bash scripts/build_xdp.sh
+          file /usr/local/lib/ddos/xdp_main.o
+          llvm-objdump -h /usr/local/lib/ddos/xdp_main.o | grep -E 'xdp|maps|BTF'
+
+  # ── Docker build ──────────────────────────────────────────
+  docker:
+    name: Docker Build
+    runs-on: ubuntu-22.04
+    needs: [test, build]
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build webpanel image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: deployments/docker/Dockerfile.webpanel
+          push: false
+          tags: ddos-webpanel:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
