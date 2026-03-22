@@ -91,3 +91,15 @@ tidy:
 # ── Binary directory ──────────────────────────────────────
 bin/:
 	mkdir -p bin
+
+# ── Bootstrap (first-time setup) ──────────────────────────
+bootstrap:
+	@bash scripts/bootstrap.sh
+
+setup:
+	@bash scripts/setup.sh
+
+# ── Sample config ─────────────────────────────────────────
+sample-config:
+	@cp -n deployments/controlplane-sample.json /etc/ddos-platform/controlplane.json 2>/dev/null || \
+	  echo "Config already exists at /etc/ddos-platform/controlplane.json"

@@ -1,3 +1,5 @@
+//go:build linux
+
 // cmd/controlplane/main.go
 // DDoS Mitigation Platform - Control Plane
 // Loads XDP program, manages BPF maps, exposes REST API + Prometheus metrics.
@@ -8,75 +10,172 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
+	"github.com/nsp/ddos-platform/pkg/config"
+	"github.com/nsp/ddos-platform/pkg/logger"
+	"github.com/nsp/ddos-platform/pkg/reputation"
 	"github.com/nsp/ddos-platform/pkg/types"
 )
 
 // ─── CLI flags ────────────────────────────────────────────────────────────────
 
 var (
-	flagIface      = flag.String("iface", "eth0", "Network interface to attach XDP to")
-	flagReplace    = flag.Bool("replace", false, "Replace existing XDP program / unpin maps")
-	flagAPIAddr    = flag.String("api", ":8080", "REST API listen address")
-	flagMetricsAddr = flag.String("metrics", ":9090", "Prometheus metrics listen address")
-	flagDetach     = flag.Bool("detach", false, "Detach XDP and exit")
+	flagIface       = flag.String("iface", "", "Network interface to attach XDP to (overrides config)")
+	flagReplace     = flag.Bool("replace", false, "Replace existing XDP program / unpin maps")
+	flagAPIAddr     = flag.String("api", "", "REST API listen address (overrides config)")
+	flagMetricsAddr = flag.String("metrics", "", "Prometheus metrics listen address (overrides config)")
+	flagDetach      = flag.Bool("detach", false, "Detach XDP and exit")
+	flagConfig      = flag.String("config", "", "Path to JSON config file")
+	flagLogLevel    = flag.String("log-level", "", "Log level: debug, info, warn, error (overrides config)")
 )
 
 func main() {
 	flag.Parse()
 
 	if os.Geteuid() != 0 {
-		log.Fatal("controlplane must run as root (required for BPF)")
+		fmt.Fprintln(os.Stderr, "error: controlplane must run as root (required for BPF)")
+		os.Exit(1)
 	}
+
+	// ── Load configuration ──
+	cfgMgr, err := config.NewManager(*flagConfig)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error loading config: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Apply CLI flag overrides (empty string = use config value)
+	cfgMgr.Update(func(c *config.RuntimeConfig) {
+		if *flagIface != "" {
+			c.Interface = *flagIface
+		}
+		if *flagAPIAddr != "" {
+			c.APIAddr = *flagAPIAddr
+		}
+		if *flagMetricsAddr != "" {
+			c.MetricsAddr = *flagMetricsAddr
+		}
+		if *flagLogLevel != "" {
+			c.LogLevel = *flagLogLevel
+		}
+	})
+
+	cfg := cfgMgr.Get()
+
+	// ── Initialise structured logger ──
+	lvl, err := logger.ParseLevel(cfg.LogLevel)
+	if err != nil {
+		lvl = logger.LevelInfo
+	}
+	log := logger.New(os.Stderr, lvl).
+		WithFields(map[string]interface{}{
+			"component": "controlplane",
+			"iface":     cfg.Interface,
+		})
 
 	if *flagDetach {
 		if err := UnpinMaps(); err != nil {
-			log.Fatalf("unpin maps: %v", err)
+			log.Error("unpin maps failed", "err", err.Error())
+			os.Exit(1)
 		}
-		log.Println("XDP program detached and maps unpinned")
+		log.Info("XDP program detached and maps unpinned")
 		os.Exit(0)
 	}
 
-	log.Printf("Starting DDoS control plane on interface %s", *flagIface)
+	log.Info("starting DDoS control plane",
+		"iface",   cfg.Interface,
+		"api",     cfg.APIAddr,
+		"metrics", cfg.MetricsAddr,
+	)
 
 	// ── Load & attach XDP ──
-	objs, err := LoadXDP(*flagIface, *flagReplace)
+	objs, err := LoadXDP(cfg.Interface, *flagReplace)
 	if err != nil {
-		log.Fatalf("LoadXDP: %v", err)
+		log.Error("LoadXDP failed", "err", err.Error())
+		os.Exit(1)
 	}
-	defer func() { _ = objs.DetachXDP() }()
+	defer func() {
+		if err := objs.DetachXDP(); err != nil {
+			log.Error("DetachXDP", "err", err.Error())
+		}
+	}()
 
-	// ── Map manager ──
+	// ── Push initial config to BPF maps ──
 	mgr := NewMapManager(objs)
+	if err := mgr.UpdateConfig(cfg.Config); err != nil {
+		log.Warn("initial config push failed", "err", err.Error())
+	}
+
+	// Hot-reload: whenever config changes, push new thresholds to BPF
+	cfgMgr.OnChange(func(c config.RuntimeConfig) {
+		if err := mgr.UpdateConfig(c.Config); err != nil {
+			log.Error("config hot-reload to BPF failed", "err", err.Error())
+		} else {
+			log.Info("BPF config updated",
+				"syn", c.SYNRateLimit,
+				"udp", c.UDPRateLimit,
+				"icmp", c.ICMPRateLimit,
+			)
+		}
+	})
 
 	// ── Context with signal handling ──
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 	go func() {
-		sig := <-sigCh
-		log.Printf("received signal %s, shutting down...", sig)
-		cancel()
+		for {
+			sig := <-sigCh
+			switch sig {
+			case syscall.SIGHUP:
+				log.Info("SIGHUP received, reloading config")
+				if err := cfgMgr.Reload(); err != nil {
+					log.Error("config reload failed", "err", err.Error())
+				}
+			default:
+				log.Info("shutdown signal received", "signal", sig.String())
+				cancel()
+				return
+			}
+		}
 	}()
 
+	// ── Reputation feed manager ──
+	if len(cfg.ReputationFeeds) > 0 {
+		feeds := make([]reputation.Feed, 0, len(cfg.ReputationFeeds))
+		for _, f := range cfg.ReputationFeeds {
+			feeds = append(feeds, reputation.Feed{
+				Name:     f.Name,
+				URL:      f.URL,
+				Interval: time.Duration(f.IntervalMinutes) * time.Minute,
+				Enabled:  f.Enabled,
+			})
+		}
+		repMgr := reputation.NewManager(feeds, func(ip string, reason uint32) error {
+			return mgr.BlockIP(ip, reason)
+		}, log)
+		repMgr.Start(ctx)
+		defer repMgr.Stop()
+		log.Info("reputation feed manager started", "feeds", len(feeds))
+	}
+
 	// ── Prometheus metrics server ──
-	metricsSrv := NewMetricsServer(*flagMetricsAddr, mgr)
+	metricsSrv := NewMetricsServer(cfg.MetricsAddr, mgr)
 	go metricsSrv.Start(ctx)
 
 	// ── REST API server ──
-	apiSrv := newAPIServer(*flagAPIAddr, mgr, metricsSrv)
+	apiSrv := newAPIServer(cfg.APIAddr, mgr, metricsSrv)
 	go func() {
-		log.Printf("REST API listening on %s", *flagAPIAddr)
+		log.Info("REST API listening", "addr", cfg.APIAddr)
 		if err := apiSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Printf("API server error: %v", err)
+			log.Error("API server error", "err", err.Error())
 		}
 	}()
 	defer func() {
@@ -85,9 +184,9 @@ func main() {
 		_ = apiSrv.Shutdown(shutCtx)
 	}()
 
-	log.Println("Control plane running. Press Ctrl-C to stop.")
+	log.Info("control plane running — send SIGINT/SIGTERM to stop, SIGHUP to reload config")
 	<-ctx.Done()
-	log.Println("Control plane stopped.")
+	log.Info("control plane stopped")
 }
 
 // ─── REST API ─────────────────────────────────────────────────────────────────
@@ -95,7 +194,6 @@ func main() {
 func newAPIServer(addr string, mgr *MapManager, ms *MetricsServer) *http.Server {
 	mux := http.NewServeMux()
 
-	// CORS + JSON middleware wrapper
 	h := func(fn http.HandlerFunc) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
@@ -110,20 +208,19 @@ func newAPIServer(addr string, mgr *MapManager, ms *MetricsServer) *http.Server 
 		})
 	}
 
-	// ── Routes ──
-	mux.Handle("GET /api/v1/metrics",    h(handleMetrics(ms)))
-	mux.Handle("GET /api/v1/blocked",    h(handleListBlocked(mgr)))
-	mux.Handle("POST /api/v1/blocked",   h(handleBlockIP(mgr)))
-	mux.Handle("DELETE /api/v1/blocked", h(handleUnblockIP(mgr)))
-	mux.Handle("GET /api/v1/attackers",  h(handleTopAttackers(mgr)))
-	mux.Handle("GET /api/v1/config",     h(handleGetConfig(mgr)))
-	mux.Handle("POST /api/v1/config",    h(handleSetConfig(mgr)))
-	mux.Handle("POST /api/v1/whitelist", h(handleWhitelistIP(mgr)))
+	mux.Handle("GET /api/v1/metrics",      h(handleMetrics(ms)))
+	mux.Handle("GET /api/v1/blocked",      h(handleListBlocked(mgr)))
+	mux.Handle("POST /api/v1/blocked",     h(handleBlockIP(mgr)))
+	mux.Handle("DELETE /api/v1/blocked",   h(handleUnblockIP(mgr)))
+	mux.Handle("GET /api/v1/attackers",    h(handleTopAttackers(mgr)))
+	mux.Handle("GET /api/v1/config",       h(handleGetConfig(mgr)))
+	mux.Handle("POST /api/v1/config",      h(handleSetConfig(mgr)))
+	mux.Handle("POST /api/v1/whitelist",   h(handleWhitelistIP(mgr)))
 	mux.Handle("DELETE /api/v1/whitelist", h(handleUnwhitelistIP(mgr)))
-	mux.Handle("GET /healthz", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"status":"ok"}`))
-	}))
+	})
 
 	return &http.Server{
 		Addr:         addr,
@@ -216,7 +313,6 @@ func handleTopAttackers(mgr *MapManager) http.HandlerFunc {
 
 func handleGetConfig(mgr *MapManager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// Read current config from BPF map
 		cfg := types.Config{
 			SYNRateLimit:  1000,
 			UDPRateLimit:  5000,

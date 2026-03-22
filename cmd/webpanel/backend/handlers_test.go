@@ -1,4 +1,4 @@
-package backend_test
+package main_test
 
 import (
 	"bytes"

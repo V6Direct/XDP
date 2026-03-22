@@ -10,7 +10,7 @@ env:
   GO_VERSION: "1.22"
 
 jobs:
-  # ── Unit + Integration Tests ─────────────────────────────
+  # ── Unit + Integration Tests ─────────────────────────────────
   test:
     name: Test (Go ${{ matrix.go }})
     runs-on: ubuntu-22.04
@@ -25,14 +25,20 @@ jobs:
         with:
           go-version: ${{ matrix.go }}
           cache: true
+          cache-dependency-path: |
+            go.mod
+            go.sum
 
-      - name: Download dependencies
-        run: go mod download
+      - name: Tidy and download dependencies
+        run: |
+          go mod tidy
+          go mod download
+          go mod verify
 
       - name: go vet
         run: go vet ./...
 
-      - name: Unit tests (race)
+      - name: Unit tests – portable packages (race detector)
         run: |
           go test -race -timeout 120s \
             -coverprofile=coverage.out \
@@ -41,21 +47,26 @@ jobs:
             ./cmd/ddosctl/... \
             ./cmd/webpanel/...
 
-      - name: Integration tests (race)
+      - name: Unit tests – Linux-only controlplane (race detector)
+        run: |
+          go test -race -timeout 60s \
+            ./cmd/controlplane/...
+
+      - name: Integration tests (race detector)
         run: |
           go test -race -timeout 60s ./integration/...
 
-      - name: Benchmarks (smoke)
+      - name: Benchmarks (smoke run)
         run: |
           go test -bench=. -benchtime=500ms -run='^$' ./benchmarks/...
 
-      - name: Upload coverage
+      - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
         with:
           files: ./coverage.out
           fail_ci_if_error: false
 
-  # ── Build binaries ────────────────────────────────────────
+  # ── Build Go binaries ─────────────────────────────────────────
   build:
     name: Build Binaries
     runs-on: ubuntu-22.04
@@ -68,30 +79,39 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
+          cache-dependency-path: |
+            go.mod
+            go.sum
 
-      - name: Download dependencies
-        run: go mod download
-
-      - name: Build webpanel
+      - name: Tidy and download dependencies
         run: |
+          go mod tidy
+          go mod download
+
+      - name: Build ddos-webpanel
+        run: |
+          mkdir -p bin
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-          go build -trimpath -ldflags="-s -w \
-            -X main.version=${{ github.sha }}" \
-            -o bin/ddos-webpanel ./cmd/webpanel/backend/
+            go build -trimpath \
+              -ldflags="-s -w -X main.version=${{ github.sha }}" \
+              -o bin/ddos-webpanel \
+              ./cmd/webpanel/backend/
 
       - name: Build ddosctl
         run: |
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-          go build -trimpath -ldflags="-s -w" \
-            -o bin/ddosctl ./cmd/ddosctl/
+            go build -trimpath \
+              -ldflags="-s -w" \
+              -o bin/ddosctl \
+              ./cmd/ddosctl/
 
-      - name: Upload artifacts
+      - name: Upload binary artifacts
         uses: actions/upload-artifact@v4
         with:
           name: binaries-${{ github.sha }}
           path: bin/
 
-  # ── BPF compilation check (Linux only) ───────────────────
+  # ── XDP BPF compilation ───────────────────────────────────────
   bpf-compile:
     name: BPF Compile Check
     runs-on: ubuntu-22.04
@@ -104,7 +124,7 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
             clang llvm libelf-dev libbpf-dev \
-            linux-headers-$(uname -r) || \
+            "linux-headers-$(uname -r)" 2>/dev/null || \
           sudo apt-get install -y --no-install-recommends \
             clang llvm libelf-dev libbpf-dev \
             linux-headers-generic
@@ -113,10 +133,13 @@ jobs:
         run: |
           mkdir -p /usr/local/lib/ddos
           bash scripts/build_xdp.sh
+          echo "--- ELF sections ---"
+          llvm-objdump -h /usr/local/lib/ddos/xdp_main.o \
+            | grep -E 'xdp|\.maps|BTF' || true
+          echo "--- Object file type ---"
           file /usr/local/lib/ddos/xdp_main.o
-          llvm-objdump -h /usr/local/lib/ddos/xdp_main.o | grep -E 'xdp|maps|BTF'
 
-  # ── Docker build ──────────────────────────────────────────
+  # ── Docker image build ────────────────────────────────────────
   docker:
     name: Docker Build
     runs-on: ubuntu-22.04
@@ -128,7 +151,7 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build webpanel image
+      - name: Build webpanel image (no push)
         uses: docker/build-push-action@v5
         with:
           context: .

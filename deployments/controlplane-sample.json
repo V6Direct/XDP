@@ -1,0 +1,29 @@
+{
+  "syn_rate_limit":  1000,
+  "udp_rate_limit":  5000,
+  "icmp_rate_limit": 100,
+  "enabled":         true,
+
+  "api_addr":     ":8080",
+  "metrics_addr": ":9090",
+  "interface":    "eth0",
+  "log_level":    "info",
+
+  "max_tracked_ips":    65536,
+  "block_duration_secs": 0,
+
+  "reputation_feeds": [
+    {
+      "name":             "Spamhaus DROP",
+      "url":              "https://www.spamhaus.org/drop/drop.txt",
+      "interval_minutes": 240,
+      "enabled":          true
+    },
+    {
+      "name":             "Emerging Threats",
+      "url":              "https://rules.emergingthreats.net/blockrules/compromised-ips.txt",
+      "interval_minutes": 120,
+      "enabled":          true
+    }
+  ]
+}
