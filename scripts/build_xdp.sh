@@ -8,7 +8,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
 SRC_DIR="$ROOT_DIR/pkg/xdp/c_src"
-OUT_DIR="/usr/local/lib/ddos"
+
+# Default install dir for real hosts; CI can override via XDP_OUT_DIR
+OUT_DIR="${XDP_OUT_DIR:-/usr/local/lib/ddos}"
 
 CLANG="${CLANG:-clang}"
 LLC="${LLC:-llc}"
@@ -35,7 +37,7 @@ echo ""
 # ── Locate kernel headers ──────────────────────────────────
 KERNEL_HEADERS="/usr/src/linux-headers-$KERNEL_VER"
 if [[ ! -d "$KERNEL_HEADERS" ]]; then
-    KERNEL_HEADERS="/usr/src/linux-headers-$(ls /usr/src/ | grep "linux-headers" | sort -V | tail -1)"
+    KERNEL_HEADERS="/usr/src/$(ls /usr/src/ | grep 'linux-headers' | sort -V | tail -1)"
 fi
 if [[ ! -d "$KERNEL_HEADERS" ]]; then
     echo "ERROR: Cannot find kernel headers. Install linux-headers-$(uname -r)"

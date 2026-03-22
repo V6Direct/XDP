@@ -107,33 +107,35 @@ jobs:
           name: binaries-${{ github.sha }}
           path: bin/
 
-  # ── XDP BPF compilation ───────────────────────────────────────
-  bpf-compile:
-    name: BPF Compile Check
-    runs-on: ubuntu-22.04
-    needs: test
-    steps:
-      - uses: actions/checkout@v4
+# ── XDP BPF compilation ───────────────────────────────────────
+bpf-compile:
+  name: BPF Compile Check
+  runs-on: ubuntu-22.04
+  needs: test
+  steps:
+    - uses: actions/checkout@v4
 
-      - name: Install BPF toolchain
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends \
-            clang llvm libelf-dev libbpf-dev \
-            "linux-headers-$(uname -r)" 2>/dev/null || \
-          sudo apt-get install -y --no-install-recommends \
-            clang llvm libelf-dev libbpf-dev \
-            linux-headers-generic
+    - name: Install BPF toolchain
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y --no-install-recommends \
+          clang llvm libelf-dev libbpf-dev \
+          "linux-headers-$(uname -r)" 2>/dev/null || \
+        sudo apt-get install -y --no-install-recommends \
+          clang llvm libelf-dev libbpf-dev \
+          linux-headers-generic
 
-      - name: Compile XDP program
-        run: |
-          mkdir -p /usr/local/lib/ddos
-          bash scripts/build_xdp.sh
-          echo "--- ELF sections ---"
-          llvm-objdump -h /usr/local/lib/ddos/xdp_main.o \
-            | grep -E 'xdp|\.maps|BTF' || true
-          echo "--- Object file type ---"
-          file /usr/local/lib/ddos/xdp_main.o
+    - name: Compile XDP program
+      run: |
+        mkdir -p .build/lib/ddos
+        XDP_OUT_DIR=.build/lib/ddos bash scripts/build_xdp.sh
+        
+        echo "--- ELF sections ---"
+        llvm-objdump -h .build/lib/ddos/xdp_main.o \
+          | grep -E 'xdp|\.maps|BTF' || true
+        
+        echo "--- Object file type ---"
+        file .build/lib/ddos/xdp_main.o
 
   # ── Docker image build ────────────────────────────────────────
   docker:
